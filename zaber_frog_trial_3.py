@@ -1,0 +1,336 @@
+#this one works for T-LA28A
+# input intensoty is 200mW
+# center is around 14.78mm
+
+import os
+import time
+import csv
+import numpy as np
+from datetime import datetime
+import scipy.constants as const
+import glob
+import matplotlib.pyplot as plt
+from datetime import datetime
+import time
+
+# --- ZABER imports ---
+from zaber_motion import Library, Units, LogOutputMode
+from zaber_motion.binary import Connection
+
+# --- SEABREEZE imports ---
+import seabreeze
+seabreeze.use('pyseabreeze')
+from seabreeze.spectrometers import Spectrometer
+
+
+# ===================== USER PARAMETERS =====================
+SAVE_DIR = "D:/allCodes/zaber_FROG/trial_data11"  # Folder to save spectra
+PORT_NAME = "COM3"               # Zaber COM port
+BAUD_RATE = 9600                 # Zaber baud rate (Binary default)
+DEVICE_ADDRESS = 2               # Confirmed address for T-LA28A
+STEP_SIZE_MM = 0.0001            # Step size in mm
+SCAN_DISTANCE_MM = 0.250         # Total scan range (approx dist)
+SPEC_INT_TIME_MS = 300           # Spectrometer integration time (ms)
+TOTAL_TRAVEL_RANGE = 28          # Total travel range in mm
+APPROX_MIDPOINT = 14.78          # approx midpoint in mm
+#WAIT_TIME = 200                  # in milliseconds. wait time after every aquisition
+
+# ===================== Post Proc PARAMETERS =====================
+central_wavelength = 519.0
+bandwidth = 80
+crop_time_range_fs = [-150, 150]
+# ===============================================================
+
+
+def ensure_directory(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+
+def save_spectrum(filename, wavelengths, intensities):
+    """Save a single spectrum to CSV."""
+    with open(filename, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Wavelength (nm)", "Intensity (a.u.)"])
+        writer.writerows(zip(wavelengths, intensities))
+
+
+def calc_dist_from_time(pulse_width=400):
+    """Calculate distance from pulse width (fs → mm)."""
+    dist = pulse_width * const.femto * const.c / const.milli
+    return dist
+
+
+def calc_time_from_dist(dist=2):
+    """Calculate time (fs) from distance (mm)."""
+    time = dist * const.milli / const.c / const.femto
+    return time
+
+
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        print(f"Directory created: {path}")
+    else:
+        print(f"Directory already exists: {path}")
+
+
+def process_spectra(data_dir, central_wavelength, bandwidth, crop_time_range_fs, output_dir):
+    """
+    Loads CSV spectra files, constructs intensity matrix, crops, saves as numpy and images.
+    Creates 2 plots: one with delay (fs) x-axis and another with distance (same units as calc_dist_from_time output).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    print("Now processing the csv files.")
+
+    crop_wavelength_range = [central_wavelength - bandwidth / 2, central_wavelength + bandwidth / 2]
+    csv_files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+
+    delays = []
+    for fname in csv_files:
+        base = os.path.basename(fname)
+        parts = base.split("_")
+        delay_str = parts[2].replace("fs", "")
+        delay_fs = float(delay_str)
+        delays.append(delay_fs)
+
+    delays = np.array(delays)
+
+    # Convert delays (fs) to distances using provided function
+    distances = np.array([calc_dist_from_time(d) for d in delays])
+
+    with open(csv_files[0], "r") as f:
+        reader = csv.reader(f)
+        next(reader)
+        wavelengths = np.array([float(row[0]) for row in reader])
+
+    intensity_matrix = np.zeros((len(wavelengths), len(delays)))
+
+    for i, fname in enumerate(csv_files):
+        with open(fname, "r") as f:
+            reader = csv.reader(f)
+            next(reader)
+            intensities = np.array([float(row[1]) for row in reader])
+            intensity_matrix[:, i] = intensities
+
+    # Save full data
+    np.save(os.path.join(output_dir, "full_intensity_matrix.npy"), intensity_matrix)
+    np.save(os.path.join(output_dir, "axes.npy"), {"wavelengths": wavelengths, "delays_fs": delays})
+    np.savez_compressed(
+        os.path.join(output_dir, "full_spectrum_data.npz"),
+        intensity_matrix=intensity_matrix,
+        wavelengths=wavelengths,
+        delays_fs=delays,
+        distances=distances,
+    )
+
+    # Crop wavelength
+    wave_mask = (wavelengths >= crop_wavelength_range[0]) & (wavelengths <= crop_wavelength_range[1])
+    cropped_waves = wavelengths[wave_mask]
+    cropped_matrix = intensity_matrix[wave_mask, :]
+
+    # Crop delay/time range
+    time_mask = (delays >= crop_time_range_fs[0]) & (delays <= crop_time_range_fs[1])
+    cropped_delays = delays[time_mask]
+    cropped_distances = distances[time_mask]
+    cropped_matrix = cropped_matrix[:, time_mask]
+
+    np.save(os.path.join(output_dir, "cropped_intensity_matrix.npy"), cropped_matrix)
+
+    # Plot 1: delay (fs) vs wavelength
+    plt.figure(figsize=(8, 6))
+    plt.pcolormesh(cropped_delays, cropped_waves, cropped_matrix, shading="auto")
+    plt.colorbar(label="Intensity (a.u.)")
+    plt.xlabel("Delay (fs)")
+    plt.ylabel("Wavelength (nm)")
+    plt.title("Cropped Intensity Map - Time Domain")
+    plt.savefig(os.path.join(output_dir, "colormap_delay.png"))
+    plt.close()
+
+    # Plot 2: distance vs wavelength
+    plt.figure(figsize=(8, 6))
+    plt.pcolormesh(cropped_distances, cropped_waves, cropped_matrix, shading="auto")
+    plt.colorbar(label="Intensity (a.u.)")
+    plt.xlabel("Distance (mm)")
+    plt.ylabel("Wavelength (nm)")
+    plt.title("Cropped Intensity Map - Distance Domain")
+    plt.savefig(os.path.join(output_dir, "colormap_distance.png"))
+    plt.close()
+
+
+"""
+def process_spectra(data_dir, central_wavelength, bandwidth, crop_time_range_fs, output_dir):
+
+    os.makedirs(output_dir, exist_ok=True)
+    print("Now processing the csv files.")
+
+    crop_wavelength_range = [central_wavelength - bandwidth / 2, central_wavelength + bandwidth / 2]
+    csv_files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+
+    delays = []
+    for fname in csv_files:
+        base = os.path.basename(fname)
+        parts = base.split("_")
+        delay_str = parts[2].replace("fs", "")
+        delay_fs = float(delay_str)
+        delays.append(delay_fs)
+
+    delays = np.array(delays)
+
+    with open(csv_files[0], "r") as f:
+        reader = csv.reader(f)
+        next(reader)
+        wavelengths = np.array([float(row[0]) for row in reader])
+
+    intensity_matrix = np.zeros((len(wavelengths), len(delays)))
+
+    for i, fname in enumerate(csv_files):
+        with open(fname, "r") as f:
+            reader = csv.reader(f)
+            next(reader)
+            intensities = np.array([float(row[1]) for row in reader])
+            intensity_matrix[:, i] = intensities
+
+    np.save(os.path.join(output_dir, "full_intensity_matrix.npy"), intensity_matrix)
+    np.save(os.path.join(output_dir, "axes.npy"), {"wavelengths": wavelengths, "delays_fs": delays})
+    np.savez_compressed(
+        os.path.join(output_dir, "full_spectrum_data.npz"),
+        intensity_matrix=intensity_matrix,
+        wavelengths=wavelengths,
+        delays_fs=delays,
+    )
+
+    wave_mask = (wavelengths >= crop_wavelength_range[0]) & (wavelengths <= crop_wavelength_range[1])
+    cropped_waves = wavelengths[wave_mask]
+    cropped_matrix = intensity_matrix[wave_mask, :]
+
+    time_mask = (delays >= crop_time_range_fs[0]) & (delays <= crop_time_range_fs[1])
+    cropped_delays = delays[time_mask]
+    cropped_matrix = cropped_matrix[:, time_mask]
+
+    np.save(os.path.join(output_dir, "cropped_intensity_matrix.npy"), cropped_matrix)
+
+    plt.figure(figsize=(8, 6))
+    plt.pcolormesh(cropped_delays, cropped_waves, cropped_matrix, shading="auto")
+    plt.colorbar(label="Intensity (a.u.)")
+    plt.xlabel("Delay (fs)")
+    plt.ylabel("Wavelength (nm)")
+    plt.title("Cropped Intensity Map")
+    plt.savefig(os.path.join(output_dir, "colormap.png"))
+    plt.close()
+"""
+
+def main():
+    print("=== Stage + Spectrometer Automated Scan ===\n")
+
+    ensure_dir(SAVE_DIR)
+
+    # --------------------- INIT STAGE ---------------------
+    print("Connecting to Zaber stage...")
+    Library.set_log_output(LogOutputMode.OFF)
+    try:
+        connection = Connection.open_serial_port(PORT_NAME, baud_rate=BAUD_RATE)
+        device = connection.get_device(DEVICE_ADDRESS)
+    except Exception as e:
+        print(f"❌ Could not connect to stage: {e}")
+        return
+
+    print("✅ Stage connected.\n")
+    
+    device_identity = device.identify()
+    print(device_identity)
+
+    # --------------------- INIT SPECTROMETER ---------------------
+    try:
+        spec = Spectrometer.from_first_available()
+    except Exception as e:
+        print(f"❌ Could not connect to spectrometer: {e}")
+        connection.close()
+        return
+
+    print(f"✅ Spectrometer connected: {spec.model}, SN: {spec.serial_number}")
+    spec.integration_time_micros(SPEC_INT_TIME_MS * 1000)
+
+    # --------------------- FIND MIDPOINT ---------------------
+    print("\nHoming stage...")
+    device.home()
+    device.wait_until_idle()
+    time.sleep(0.5)
+
+    travel_range = TOTAL_TRAVEL_RANGE
+    #midpoint = travel_range / 2.0
+    midpoint = APPROX_MIDPOINT
+    midpoint_delay = calc_time_from_dist(midpoint)
+
+    print(f"Assumed total travel range: {travel_range:.2f} mm")
+    print(f"Moving to midpoint: {midpoint:.2f} mm\n")
+
+    device.move_absolute(midpoint, Units.LENGTH_MILLIMETRES)
+    device.wait_until_idle()
+    time.sleep(0.2)
+
+    # --------------------- SCAN SETUP ---------------------
+    start_pos = midpoint - SCAN_DISTANCE_MM / 2
+    end_pos = midpoint + SCAN_DISTANCE_MM / 2
+    num_steps = int(SCAN_DISTANCE_MM / STEP_SIZE_MM) + 1
+
+    print(f"Scanning from {start_pos:.2f} mm to {end_pos:.2f} mm in {num_steps} steps.")
+    ensure_directory(SAVE_DIR)
+
+    wavelengths = spec.wavelengths()
+
+    # --------------------- SCAN LOOP ---------------------
+    for i, pos in enumerate(np.linspace(start_pos, end_pos, num_steps)):
+        print(f"\n[{i+1}/{num_steps}] Moving to {pos:.3f} mm ...")
+        device.move_absolute(pos, Units.LENGTH_MILLIMETRES)
+        device.wait_until_idle()
+        time.sleep(0.1)
+
+        intensities = spec.intensities()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        delay = calc_time_from_dist(pos) - midpoint_delay
+        filename = os.path.join(SAVE_DIR, f"spectrum_{i+1:03d}_{delay:.4f}fs_{timestamp}.csv")
+        save_spectrum(filename, wavelengths, intensities)
+        print(f"✅ Saved: {os.path.basename(filename)}")
+        time.sleep(0.2)
+
+    print("\n✅ Scan complete. Returning to midpoint...")
+    device.move_absolute(midpoint, Units.LENGTH_MILLIMETRES)
+    device.wait_until_idle()
+    connection.close()
+
+    process_spectra(
+        data_dir=SAVE_DIR,
+        central_wavelength=central_wavelength,
+        bandwidth=bandwidth,
+        crop_time_range_fs=crop_time_range_fs,
+        output_dir=SAVE_DIR,
+    )
+    
+    logFile = os.path.join(SAVE_DIR, "run_parameters.txt")
+
+    with open(logFile, "w") as f:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"Run Parameters - {now}\n")
+        f.write("=" * 60 + "\n")
+        f.write(f"SAVE_DIR = {SAVE_DIR}\n")
+        f.write(f"PORT_NAME = {PORT_NAME}\n")
+        f.write(f"BAUD_RATE = {BAUD_RATE}\n")
+        f.write(f"DEVICE_ADDRESS = {DEVICE_ADDRESS}\n")
+        f.write(f"STEP_SIZE_MM = {STEP_SIZE_MM}\n")
+        f.write(f"SCAN_DISTANCE_MM = {SCAN_DISTANCE_MM}\n")
+        f.write(f"SPEC_INT_TIME_MS = {SPEC_INT_TIME_MS}\n")
+        f.write(f"TOTAL_TRAVEL_RANGE = {TOTAL_TRAVEL_RANGE}\n")
+        f.write(f"APPROX_MIDPOINT = {APPROX_MIDPOINT}\n")
+        f.write("\n# Post Processing Parameters\n")
+        f.write(f"central_wavelength = {central_wavelength}\n")
+        f.write(f"bandwidth = {bandwidth}\n")
+        f.write(f"crop_time_range_fs = {crop_time_range_fs}\n")
+        f.write("=" * 60 + "\n")
+    
+
+    print("All done. 🎉")
+
+
+if __name__ == "__main__":
+    main()
