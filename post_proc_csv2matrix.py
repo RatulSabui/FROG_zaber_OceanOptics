@@ -1,3 +1,8 @@
+# After the data has been captured by the stage/spectrometer operations, this code can be used toi create the matrix
+# Its functionality has also been included in the main code zaber_frog_trial_3
+# do to be fair this code is redundant
+
+
 ##################################################################################################
 
 SAVE_DIR = "D:/allCodes/zaber_FROG/trial_data"  # Folder to save spectra
