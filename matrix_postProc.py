@@ -21,9 +21,9 @@ folder = 'D:/allCodes/zaber_FROG/trial_data8'
 
 filename = 'full_spectrum_data.npz'
 
-approx_pulse_width = 150 #fs
+approx_pulse_width = 400 #fs
 
-padding_thickness = 0.1 # 0.1 means 10%
+padding_thickness = 0.05 # 0.1 means 10%
 total_dimension = 512 # total binned matrix has to be order of 2
 
 #for saving the outputs
@@ -461,6 +461,72 @@ def linearize_intensity(wavelengths, intensity_matrix):
     return linear_freqs, linear_intensity
 
 
+def linearize_intensity_wavelength(wavelengths, intensity_matrix):
+    """
+    Linearize the intensity matrix along the spectral axis to a linear wavelength grid.
+    
+    Parameters:
+        wavelengths (np.ndarray): 1D array of wavelengths (nm), assumed sorted ascending but not necessarily linear.
+        intensity_matrix (np.ndarray): 2D intensity matrix with shape (len(wavelengths), N_delay).
+    
+    Returns:
+        linear_wavelengths (np.ndarray): 1D array of linearly spaced wavelengths (nm).
+        linear_intensity (np.ndarray): Intensity matrix re-interpolated to linear wavelength grid (same shape).
+    """
+    # Create linearly spaced wavelength grid from min to max
+    linear_wavelengths = np.linspace(wavelengths.min(), wavelengths.max(), len(wavelengths))
+    
+    # Interpolate intensity matrix spectral axis to linear_wavelengths
+    interp_func = interp1d(wavelengths, intensity_matrix, axis=0, kind='linear', bounds_error=False, fill_value=0)
+    linear_intensity = interp_func(linear_wavelengths)
+    
+    return linear_wavelengths, linear_intensity
+
+
+
+def plot_central_slices(delay_array, wavelength_array, intensity_matrix, save_dir):
+    """
+    Plots and saves line plots of central row (intensity vs delay) and
+    central column (intensity vs wavelength) from the 2D intensity matrix.
+    
+    Parameters:
+        delay_array (np.ndarray): 1D array of delay values (x-axis for row plot)
+        wavelength_array (np.ndarray): 1D array of wavelength values (x-axis for column plot)
+        intensity_matrix (np.ndarray): 2D intensity matrix (wavelength x delay)
+        save_dir (str): directory path to save the plots
+    
+    Saves plots as 'central_row_vs_delay.png' and 'central_column_vs_wavelength.png' in save_dir.
+    """
+    
+    # Central row index (wavelength axis)
+    central_row_idx = intensity_matrix.shape[0] // 2
+    central_row_intensity = intensity_matrix[central_row_idx, :]
+    
+    plt.figure()
+    plt.plot(delay_array, central_row_intensity, '-b')
+    plt.xlabel('Delay')
+    plt.ylabel('Intensity')
+    plt.title('Central Row Intensity vs Delay')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'{save_dir}/central_row_vs_delay.png')
+    plt.close()
+    
+    # Central column index (delay axis)
+    central_col_idx = intensity_matrix.shape[1] // 2
+    central_col_intensity = intensity_matrix[:, central_col_idx]
+    
+    plt.figure()
+    plt.plot(wavelength_array, central_col_intensity, '-r')
+    plt.xlabel('Wavelength')
+    plt.ylabel('Intensity')
+    plt.title('Central Column Intensity vs Wavelength')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'{save_dir}/central_column_vs_wavelength.png')
+    plt.close()
+    
+
 #####################################################################################################################
 
 orig_size, pad_side = calculate_equal_square_padding(total_dimension, padding_thickness)
@@ -470,6 +536,7 @@ intensity_matrix, wavelengths, delay_array, distances = read_npz_file(file_path)
 print("Intensity matrix shape:", intensity_matrix.shape)
 print("Initial Wavelength array length:", len(wavelengths))
 print("Initial Delays array length:", len(delay_array))
+print(wavelengths)
 
 # --- Step 2: Center the delay axis so peak is at zero ---
 centered_delay_array, peak_delay, peak_col_idx = center_delay_axis_by_peak(intensity_matrix, np.array(delay_array))
@@ -481,8 +548,13 @@ plot_and_save_intensity_colormesh(centered_delay_array, wavelengths,intensity_ma
 Isig_temp = background_subtract(intensity_matrix, freq_sub=1.0, delay_sub=1.0)
 intensity_matrix = enforce_nonnegativity(Isig_temp)
 
+print(wavelengths)
+
 # since the wavelength axis does not have linear values
-wavelengths, intensity_matrix = linearize_intensity(wavelengths, intensity_matrix)
+wavelengths, intensity_matrix = linearize_intensity_wavelength(wavelengths, intensity_matrix)
+
+print("After linearization.")
+print(wavelengths)
 
 #crops the matrix with relevant delay values
 cropped_delays, cropped_matrix = crop_matrix_by_delay_range(centered_delay_array, intensity_matrix, selection_range=approx_pulse_width)
@@ -490,8 +562,10 @@ cropped_delays, cropped_matrix = crop_matrix_by_delay_range(centered_delay_array
 #crops the matrix and makes it a square matrix
 cropped_wavelengths, cropped_matrix = crop_matrix_to_square_by_max_row_sum(cropped_matrix, wavelengths)
 
+
 width, height, temp_calib, spec_calib, center_wl = get_matrix_properties(cropped_delays, cropped_wavelengths)
 
+print("After Cropping.")
 print(f"Width (x-axis length): {width}")
 print(f"Height (y-axis length): {height}")
 print(f"Temporal calibration (x resolution): {temp_calib}")
@@ -515,3 +589,15 @@ plot_and_save_intensity_colormesh(delay_ext, freq_ext, padded_mat, amp_mat_op, t
 
 frg_file_path = save_path +"/"+ 'frog_trace.frg'
 save_to_frg(frg_file_path, padded_mat, temp_calib, center_wl, spec_calib)
+
+# plotting linecuts 
+plot_central_slices(delay_ext, freq_ext, padded_mat, save_path)
+
+width, height, temp_calib, spec_calib, center_wl = get_matrix_properties(delay_ext, freq_ext)
+
+print("After Saving to frg.")
+print(f"Width (x-axis length): {width}")
+print(f"Height (y-axis length): {height}")
+print(f"Temporal calibration (x resolution): {temp_calib}")
+print(f"Spectral calibration (y resolution): {spec_calib}")
+print(f"Central wavelength: {center_wl}")
