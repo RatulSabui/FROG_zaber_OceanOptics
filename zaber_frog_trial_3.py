@@ -27,12 +27,12 @@ from seabreeze.spectrometers import Spectrometer
 
 
 # ===================== USER PARAMETERS =====================
-SAVE_DIR = "D:/allCodes/zaber_FROG/trial_data11"  # Folder to save spectra
+SAVE_DIR = "D:/allCodes/zaber_FROG/trial_data15"  # Folder to save spectra
 PORT_NAME = "COM3"               # Zaber COM port
 BAUD_RATE = 9600                 # Zaber baud rate (Binary default)
 DEVICE_ADDRESS = 2               # Confirmed address for T-LA28A
 STEP_SIZE_MM = 0.0001            # Step size in mm
-SCAN_DISTANCE_MM = 0.250         # Total scan range (approx dist)
+SCAN_DISTANCE_MM = 0.1         # Total scan range (approx dist)
 SPEC_INT_TIME_MS = 300           # Spectrometer integration time (ms)
 TOTAL_TRAVEL_RANGE = 28          # Total travel range in mm
 APPROX_MIDPOINT = 14.78          # approx midpoint in mm
@@ -322,6 +322,7 @@ def main():
         time.sleep(0.1)
 
         intensities = spec.intensities()
+        time.sleep(SPEC_INT_TIME_MS/1000)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         delay = calc_time_from_dist(pos) - midpoint_delay
         filename = os.path.join(SAVE_DIR, f"spectrum_{i+1:03d}_{delay:.4f}fs_{timestamp}.csv")

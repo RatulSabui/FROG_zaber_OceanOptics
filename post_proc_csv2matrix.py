@@ -7,7 +7,7 @@
 
 SAVE_DIR = "D:/allCodes/zaber_FROG/trial_data8"  # Folder to save spectra
 CENTRAL_WAVELENGTH = 519                          # nanometers - central wavelength
-BANDWIDTH = 80                                    # crop bandwidth in nanometers
+BANDWIDTH = 20                                   # crop bandwidth in nanometers
 CROP_TIME_RANGE = [-500, 500]                     # crop time range in fs
 OUTPUT_DIR = SAVE_DIR                             
 
